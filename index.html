@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="uz">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#120b05">
+<title>Kuzgi O'rmon — Ideal Sokinlik</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{width:100%;height:100%;overflow:hidden;background:#120b05}
+body{font-family:Arial,sans-serif;user-select:none;-webkit-tap-highlight-color:transparent}
+#world{position:fixed;inset:0;overflow:hidden}
+#webgl-canvas{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
+
+/* Atmosfera va Boke xiraligi */
+#cinematic-overlay{
+ position:absolute;inset:0;pointer-events:none;
+ background:
+  radial-gradient(circle at 50% 30%, rgba(255,180,80,0.15), transparent 60%),
+  linear-gradient(180deg, rgba(10,5,2,0.3) 0%, transparent 40%, rgba(8,3,1,0.6) 100%);
+}
+
+.top{
+ position:absolute;z-index:5;top:calc(env(safe-area-inset-top) + 15px);
+ left:0;right:0;display:flex;justify-content:flex-end;gap:10px;padding:0 17px
+}
+.control{
+ width:49px;height:49px;border-radius:50%;
+ border:1px solid rgba(255,255,255,.25);
+ background:rgba(30,15,5,.45);color:white;
+ display:grid;place-items:center;
+ backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);
+ box-shadow:0 8px 32px rgba(0,0,0,0.37);
+ cursor:pointer;transition:transform 0.2s
+}
+.control:active{transform:scale(.90)}
+.control svg{width:22px;height:22px;stroke:white;fill:none;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+
+#play{
+ position:absolute;z-index:6;left:50%;top:50%;transform:translate(-50%,-50%);
+ width:80px;height:80px;border-radius:50%;display:grid;place-items:center;
+ border:1px solid rgba(255,220,180,0.5);background:rgba(45,20,5,0.65);color:white;
+ backdrop-filter:blur(22px);-webkit-backdrop-filter:blur(22px);
+ box-shadow:0 0 0 14px rgba(255,180,100,0.08), 0 15px 45px rgba(0,0,0,0.6);
+ transition:opacity .7s,transform .3s;cursor:pointer
+}
+#play svg{width:32px;height:32px;stroke:#ffe0b2;fill:none;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+#play.hidden{opacity:0;pointer-events:none;transform:translate(-50%,-50%) scale(.8)}
+
+#hint{
+ position:absolute;z-index:5;bottom:calc(env(safe-area-inset-bottom) + 25px);
+ left:50%;transform:translateX(-50%);white-space:nowrap;
+ padding:12px 22px;border-radius:30px;
+ color:#ffe8d6;font-size:13px;letter-spacing:.4px;
+ background:rgba(25(10,5,0.55));border:1px solid rgba(255,200,150,0.2);
+ backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);
+ text-shadow:0 2px 10px rgba(0,0,0,0.8);transition:opacity 2s
+}
+#hint.dim{opacity:.40}
+</style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+</head>
+<body>
+
+<div id="world">
+ <canvas id="webgl-canvas"></canvas>
+ <div id="cinematic-overlay"></div>
+</div>
+
+<div class="top">
+ <button class="control" id="down" aria-label="Ovozni pasaytirish">
+  <svg viewBox="0 0 24 24"><path d="M11 5 6 9H3v6h3l5 4z"/><path d="M16 9l5 6"/></svg>
+ </button>
+ <button class="control" id="up" aria-label="Ovozni balandlatish">
+  <svg viewBox="0 0 24 24"><path d="M11 5 6 9H3v6h3l5 4z"/><path d="M15 9a5 5 0 0 1 0 6"/><path d="M18 6a9 9 0 0 1 0 12"/></svg>
+ </button>
+</div>
+
+<button id="play" aria-label="Tabiatni his qilish">
+ <svg viewBox="0 0 24 24"><path d="M11 5 6 9H3v6h3l5 4z"/><path d="M15 9a5 5 0 0 1 0 6"/><path d="M18 6a9 9 0 0 1 0 12"/></svg>
+</button>
+<div id="hint">Kuzgi o'rmon muhitiga kirish uchun bosing</div>
+
+<script>
+(() => {
+ const canvas = document.getElementById('webgl-canvas');
+ const play = document.getElementById('play');
+ const hint = document.getElementById('hint');
+
+ let mainVolume = 0.6;
+ let running = false;
+
+ // --- Procedural Multi-layered Nature Audio (Web Audio API) ---
+ let audioCtx, masterGain, windGain, rustleGain, lfoFilter;
+
+ function initNaturalAudio() {
+  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  masterGain = audioCtx.createGain();
+  masterGain.gain.value = mainVolume;
+  masterGain.connect(audioCtx.destination);
+
+  // 1. Mayin shamol eshishi (Breeze)
+  const noiseBuffer = audioCtx.createBuffer(1, audioCtx.sampleRate * 3, audioCtx.sampleRate);
+  const data = noiseBuffer.getChannelData(0);
+  for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
+
+  const windSource = audioCtx.createBufferSource();
+  windSource.buffer = noiseBuffer;
+  windSource.loop = true;
+
+  const windFilter = audioCtx.createBiquadFilter();
+  windFilter.type = 'bandpass';
+  windFilter.frequency.value = 280;
+  windFilter.Q.value = 1.2;
+
+  windGain = audioCtx.createGain();
+  windGain.gain.value = 0.4;
+
+  // LFO - Shamolning tabiiy o'zgarib turishi
+  const lfo = audioCtx.createOscillator();
+  lfo.frequency.value = 0.05; // Sekin shamol toqatlari
+  const lfoAmount = audioCtx.createGain();
+  lfoAmount.gain.value = 150;
+
+  lfo.connect(lfoAmount);
+  lfoAmount.connect(windFilter.frequency);
+  lfo.start();
+
+  windSource.connect(windFilter);
+  windFilter.connect(windGain);
+  windGain.connect(masterGain);
+  windSource.start();
+
+  // 2. Barglarning shitirlashi (Leaf Rustle)
+  const rustleSource = audioCtx.createBufferSource();
+  rustleSource.buffer = noiseBuffer;
+  rustleSource.loop = true;
+
+  const rustleFilter = audioCtx.createBiquadFilter();
+  rustleFilter.type = 'highpass';
+  rustleFilter.frequency.value = 1800;
+
+  rustleGain = audioCtx.createGain();
+  rustleGain.gain.value = 0.08;
+
+  rustleSource.connect(rustleFilter);
+  rustleFilter.connect(rustleGain);
+  rustleGain.connect(masterGain);
+  rustleSource.start();
+ }
+
+ // --- Three.js 3D Realist Sahnasi ---
+ const scene = new THREE.Scene();
+ scene.fog = new THREE.FogExp2(0x1a0d05, 0.0018);
+
+ const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 1, 2000);
+ camera.position.set(0, 20, 350);
+
+ const renderer = new THREE.WebGLRenderer({ canvas: canvas, antialias: true, alpha: false });
+ renderer.setSize(window.innerWidth, window.innerHeight);
+ renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+ renderer.toneMapping = THREE.ACESFilmicToneMapping;
+
+ // Yoritish (Oltin kuzgi quyosh)
+ const ambientLight = new THREE.AmbientLight(0xffb77d, 0.8);
+ scene.add(ambientLight);
+
+ const sunLight = new THREE.DirectionalLight(0xffa040, 1.8);
+ sunLight.position.set(150, 300, 100);
+ scene.add(sunLight);
+
+ // --- 3D Barg Geometriyasini Procedural Yaratish (Egilgan Barg) ---
+ function createLeafGeometry() {
+  const geom = new THREE.PlaneGeometry(12, 18, 4, 4);
+  const pos = geom.attributes.position;
+  
+  // Bargni tekis emas, 3D organik shaklga keltirish (Egilish)
+  for (let i = 0; i < pos.count; i++) {
+   let x = pos.getX(i);
+   let y = pos.getY(i);
+   let z = Math.sin((y / 18) * Math.PI) * 3 - (x*x * 0.05); // Markaziy qovurg'a egilishi
+   pos.setZ(i, z);
+  }
+  geom.computeVertexNormals();
+  return geom;
+ }
+
+ const leafGeom = createLeafGeometry();
+ const leafColors = [0xd35400, 0xe67e22, 0xf39c12, 0xc0392b, 0xa04000];
+
+ const leafMaterials = leafColors.map(color => {
+  return new THREE.MeshStandardMaterial({
+   color: color,
+   roughness: 0.6,
+   metalness: 0.1,
+   side: THREE.DoubleSide
+  });
+ });
+
+ // Barglar Klasteri (Har biri takrorlanmas aerodinamlika bilan)
+ const leafCount = 70;
+ const leaves = [];
+ const leafGroup = new THREE.Group();
+ scene.add(leafGroup);
+
+ for (let i = 0; i < leafCount; i++) {
+  const mat = leafMaterials[Math.floor(Math.random() * leafMaterials.length)];
+  const mesh = new THREE.Mesh(leafGeom, mat);
+
+  const scale = 0.8 + Math.random() * 0.8;
+  mesh.scale.set(scale, scale, scale);
+
+  mesh.position.set(
+   (Math.random() - 0.5) * 600,
+   Math.random() * 400 - 100,
+   (Math.random() - 0.5) * 500
+  );
+
+  mesh.rotation.set(
+   Math.random() * Math.PI,
+   Math.random() * Math.PI,
+   Math.random() * Math.PI
+  );
+
+  leafGroup.add(mesh);
+
+  leaves.push({
+   mesh: mesh,
+   fallSpeed: 0.3 + Math.random() * 0.5,
+   driftSpeed: 0.2 + Math.random() * 0.4,
+   rotSpeedX: (Math.random() - 0.5) * 0.02,
+   rotSpeedY: (Math.random() - 0.5) * 0.03,
+   rotSpeedZ: (Math.random() - 0.5) * 0.02,
+   oscillation: Math.random() * Math.PI * 2,
+   oscSpeed: 0.01 + Math.random() * 0.015,
+   delay: Math.random() * 300
+  });
+ }
+
+ // Background Daraxt Siluetlari va Zarrachalar (Atmospheric Dust)
+ const dustGeom = new THREE.BufferGeometry();
+ const dustCount = 300;
+ const dustPos = new Float32Array(dustCount * 3);
+ for(let i=0; i<dustCount*3; i+=3) {
+  dustPos[i] = (Math.random() - 0.5) * 800;
+  dustPos[i+1] = Math.random() * 400;
+  dustPos[i+2] = (Math.random() - 0.5) * 800;
+ }
+ dustGeom.setAttribute('position', new THREE.BufferAttribute(dustPos, 3));
+ const dustMat = new THREE.PointsMaterial({ size: 2, color: 0xffd1a4, transparent: true, opacity: 0.4 });
+ scene.add(new THREE.Points(dustGeom, dustMat));
+
+ // --- Render va Fizika Tsikli ---
+ let windIntensity = 0;
+ function animate() {
+  requestAnimationFrame(animate);
+
+  const time = Date.now() * 0.0008;
+  windIntensity = Math.sin(time) * 0.5 + 0.3; // O'zgaruvchan shamol
+
+  leaves.forEach((l) => {
+   if (l.delay > 0) {
+    l.delay--;
+    return;
+   }
+
+   l.oscillation += l.oscSpeed;
+
+   // Aerodinamik Tushish (Realist Parvoz)
+   l.mesh.position.y -= l.fallSpeed;
+   l.mesh.position.x += Math.sin(l.oscillation) * l.driftSpeed + windIntensity;
+   l.mesh.position.z += Math.cos(l.oscillation) * (l.driftSpeed * 0.5);
+
+   // 3D Erkin Aylanish
+   l.mesh.rotation.x += l.rotSpeedX + Math.sin(l.oscillation) * 0.02;
+   l.mesh.rotation.y += l.rotSpeedY;
+   l.mesh.rotation.z += l.rotSpeedZ;
+
+   // Ekrandan o'tib ketganda qayta muvozanatlanish
+   if (l.mesh.position.y < -150) {
+    l.mesh.position.y = 250 + Math.random() * 50;
+    l.mesh.position.x = (Math.random() - 0.5) * 600;
+    l.delay = Math.random() * 200; // Har safar har xil kechikish
+   }
+  });
+
+  // Kamera ohista tebranadi (Xuddi qo'lda ushlangandek)
+  camera.position.x = Math.sin(time * 0.5) * 15;
+  camera.position.y = 20 + Math.cos(time * 0.3) * 5;
+  camera.lookAt(0, 0, 0);
+
+  renderer.render(scene, camera);
+ }
+ animate();
+
+ window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+ });
+
+ // --- Interaktiv Boshqaruv ---
+ async function startExperience(){
+  if (!audioCtx) {
+   initNaturalAudio();
+  } else if (audioCtx.state === 'suspended') {
+   await audioCtx.resume();
+  }
+  running = true;
+  play.classList.add('hidden');
+  hint.classList.remove('dim');
+  setTimeout(() => hint.classList.add('dim'), 5000);
+ }
+
+ play.addEventListener('click', startExperience);
+
+ document.getElementById('up').addEventListener('click', () => {
+  mainVolume = Math.min(1, mainVolume + 0.1);
+  if (masterGain) masterGain.gain.value = mainVolume;
+  if (!running) startExperience();
+ });
+
+ document.getElementById('down').addEventListener('click', () => {
+  mainVolume = Math.max(0, mainVolume - 0.1);
+  if (masterGain) masterGain.gain.value = mainVolume;
+ });
+
+ // Qurilma harakatiga javob beruvchi Parallax
+ window.addEventListener('deviceorientation', (e) => {
+  if (e.gamma == null) return;
+  const gx = Math.max(-1, Math.min(1, e.gamma / 30));
+  leafGroup.position.x = gx * 40;
+ }, { passive: true });
+
+})();
+</script>
+</body>
+  </html>
